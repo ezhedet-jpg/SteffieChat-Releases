@@ -1,0 +1,1 @@
+Venice manga translation Android APK; build source uploaded 2026-10-20. GitHub Actions should compile app:assembleDebug.
