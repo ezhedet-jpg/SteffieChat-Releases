@@ -62,14 +62,14 @@ public class CaptureService extends Service {
             };
     private WindowManager wm;
     private CaptionOverlay captions;
-    private TextView bubble;
-    private WindowManager.LayoutParams bubbleParams;
+    private FloatingControls controls;
+    private WindowManager.LayoutParams controlsParams;
     private MediaProjection projection;
     private ImageReader reader;
     private VirtualDisplay virtualDisplay;
     private TextRecognizer recognizer;
     private int screenWidth, screenHeight;
-    private boolean stopped, paused, scanning, pending;
+    private boolean stopped, autoEnabled = true, scanning, pending, manualQueued;
     private String shownContent = "", lastContent = "", previousContext = "";
     private int repeated;
     private long retryAfter;
@@ -77,7 +77,7 @@ public class CaptureService extends Service {
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (stopped) return;
-            if (!paused && !scanning && reader != null) scan();
+            if (autoEnabled && !scanning && reader != null) scan(false);
             ui.postDelayed(this, Settings.interval(CaptureService.this));
         }
     };
@@ -157,68 +157,68 @@ public class CaptureService extends Service {
                 PixelFormat.TRANSLUCENT);
         full.gravity = Gravity.TOP | Gravity.LEFT;
         wm.addView(captions, full);
-        bubble = new TextView(this);
-        bubble.setText("RU");
-        bubble.setTextSize(16);
-        bubble.setTextColor(Color.WHITE);
-        bubble.setGravity(Gravity.CENTER);
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.rgb(51, 102, 185));
-        background.setCornerRadius(dp(35));
-        bubble.setBackground(background);
-        bubble.setElevation(dp(7));
-        bubbleParams = new WindowManager.LayoutParams(dp(56), dp(56),
+
+        controls = new FloatingControls(this, new FloatingControls.Callbacks() {
+            @Override public void translateNow() {
+                if (stopped || reader == null) {
+                    report("Захват не запущен. Открой приложение и включи перевод.");
+                    return;
+                }
+                if (pending) {
+                    showStatus("Venice уже переводит предыдущие реплики…");
+                    return;
+                }
+                if (scanning) {
+                    manualQueued = true;
+                    showStatus("Получаю актуальный кадр…");
+                    return;
+                }
+                showStatus("Распознаю реплики на экране…");
+                scan(true);
+            }
+            @Override public void setAutomatic(boolean enabled) {
+                autoEnabled = enabled;
+                lastContent = "";
+                repeated = 0;
+                if (!enabled && captions != null) captions.clear();
+                showStatus(enabled
+                        ? "Автоперевод включён. Останови прокрутку для перевода."
+                        : "Автоперевод выключен. Нажимай «Перевести» вручную.");
+            }
+            @Override public void stop() { stopSelf(); }
+        });
+
+        controlsParams = new WindowManager.LayoutParams(
+                Math.min(dp(330), screenWidth - dp(12)),
+                WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
-        bubbleParams.gravity = Gravity.TOP | Gravity.LEFT;
-        bubbleParams.x = dp(8);
-        bubbleParams.y = dp(190);
-        bubble.setOnTouchListener(new View.OnTouchListener() {
-            float initialX, initialY;
-            int oldX, oldY;
-            long downAt;
-            @Override public boolean onTouch(View v, MotionEvent ev) {
-                switch (ev.getActionMasked()) {
-                    case MotionEvent.ACTION_DOWN:
-                        initialX = ev.getRawX(); initialY = ev.getRawY();
-                        oldX = bubbleParams.x; oldY = bubbleParams.y;
-                        downAt = System.currentTimeMillis();
-                        return true;
-                    case MotionEvent.ACTION_MOVE:
-                        bubbleParams.x = Math.max(0, Math.min(screenWidth - dp(56),
-                                oldX + (int)(ev.getRawX() - initialX)));
-                        bubbleParams.y = Math.max(0, Math.min(screenHeight - dp(56),
-                                oldY + (int)(ev.getRawY() - initialY)));
-                        if (bubble != null) wm.updateViewLayout(bubble, bubbleParams);
-                        return true;
-                    case MotionEvent.ACTION_UP:
-                        float distance = (float)Math.hypot(ev.getRawX() - initialX,
-                                ev.getRawY() - initialY);
-                        if (distance < dp(12)) {
-                            if (System.currentTimeMillis() - downAt > 1100) stopSelf();
-                            else {
-                                paused = !paused;
-                                bubble.setText(paused ? "▶" : "RU");
-                                if (paused && captions != null) captions.clear();
-                                if (!paused) { lastContent = ""; repeated = 0; }
-                            }
-                        }
-                        return true;
-                }
-                return false;
-            }
-        });
-        wm.addView(bubble, bubbleParams);
+        controlsParams.gravity = Gravity.TOP | Gravity.LEFT;
+        controlsParams.x = dp(6);
+        controlsParams.y = dp(145);
+        controls.attachDrag(wm, controlsParams, screenWidth, screenHeight);
+        wm.addView(controls, controlsParams);
+        showStatus("Готово. Нажми «Перевести» — или используй автоперевод.");
+    }
+
+    private void showStatus(String message) {
+        Settings.prefs(this).edit().putString("last_status", message).apply();
+        if (controls != null) controls.setStatus(message);
     }
     private int dp(float px) {
         return (int)(px * getResources().getDisplayMetrics().density + .5f);
     }
-    private void scan() {
+    private void scan(boolean manual) {
+        if (stopped || reader == null) return;
+        if (scanning) {
+            if (manual) manualQueued = true;
+            return;
+        }
         scanning = true;
-        captions.setVisibility(View.INVISIBLE);
-        bubble.setVisibility(View.INVISIBLE);
+        if (captions != null) captions.setVisibility(View.INVISIBLE);
+        if (controls != null) controls.setVisibility(View.INVISIBLE);
         ui.postDelayed(() -> {
             if (stopped || reader == null) { scanning = false; return; }
             worker.execute(() -> {
@@ -235,7 +235,7 @@ public class CaptureService extends Service {
                 Bitmap finalBitmap = bitmap;
                 ui.post(() -> {
                     if (captions != null) captions.setVisibility(View.VISIBLE);
-                    if (bubble != null) bubble.setVisibility(View.VISIBLE);
+                    if (controls != null) controls.setVisibility(View.VISIBLE);
                     if (stopped || finalBitmap == null) {
                         scanning = false;
                         return;
@@ -252,7 +252,9 @@ public class CaptureService extends Service {
                     }
                     task.addOnSuccessListener(text -> {
                         finalBitmap.recycle();
-                        processOcr(text, w, h);
+                        boolean forced = manual || manualQueued;
+                        manualQueued = false;
+                        processOcr(text, w, h, forced);
                         scanning = false;
                     }).addOnFailureListener(e -> {
                         finalBitmap.recycle();
@@ -286,7 +288,7 @@ public class CaptureService extends Service {
         cropped.recycle();
         return smaller;
     }
-    private void processOcr(Text detected, int w, int h) {
+    private void processOcr(Text detected, int w, int h, boolean forced) {
         if (stopped) return;
         List<Dialogue> dialogs = new ArrayList<>();
         for (Text.TextBlock block : detected.getTextBlocks()) {
@@ -317,6 +319,7 @@ public class CaptureService extends Service {
             shownContent = lastContent = "";
             repeated = 0;
             captions.clear();
+            if (forced) showStatus("Английский текст не найден. Прокрути к репликам и нажми ещё раз.");
             return;
         }
         if (content.equals(lastContent)) repeated++;
@@ -329,15 +332,21 @@ public class CaptureService extends Service {
         if (stored != null) {
             captions.show(capped, stored, w, h);
             shownContent = content;
+            if (forced) showStatus("Готово: перевод из кэша (" + capped.size() + " реплик).");
             return;
         }
-        if (repeated < 2 || pending || paused || System.currentTimeMillis() < retryAfter) return;
+        if (pending) {
+            if (forced) showStatus("Venice уже переводит предыдущий экран…");
+            return;
+        }
+        if (!forced && (repeated < 2 || System.currentTimeMillis() < retryAfter)) return;
         if (!Settings.reserveRequest(this)) {
             report("Достигнут дневной лимит запросов Venice (" + Settings.maxDaily(this) + ")");
             retryAfter = System.currentTimeMillis() + 60_000;
             return;
         }
         pending = true;
+        showStatus("Venice переводит " + capped.size() + " реплик…");
         final String requested = content;
         final String previous = previousContext;
         final String apiKey = Settings.loadKey(this);
@@ -361,9 +370,13 @@ public class CaptureService extends Service {
                         if (ru != null) ctx.append(d.english).append(" → ").append(ru).append("\n");
                     }
                     previousContext = ctx.length() > 850 ? ctx.substring(ctx.length() - 850) : ctx.toString();
-                    if (!paused && requested.equals(lastContent)) {
+                    if (requested.equals(lastContent)) {
                         captions.show(capped, result.translations, w, h);
                         shownContent = requested;
+                        showStatus("Переведено " + result.translations.size()
+                                + " из " + capped.size() + " реплик · Venice AI");
+                    } else {
+                        showStatus("Перевод готов. Экран изменился — нажми «Перевести» снова.");
                     }
                     updateNotification("Venice: " + Settings.callsToday(this)
                             + "/" + Settings.maxDaily(this) + " запросов сегодня");
@@ -414,11 +427,8 @@ public class CaptureService extends Service {
     private void report(String message) {
         Log.w(TAG, message);
         Settings.rememberError(this, message);
+        showStatus(message);
         updateNotification(message);
-        if (bubble != null) {
-            bubble.setText("!");
-            ui.postDelayed(() -> { if (!stopped && bubble != null) bubble.setText(paused ? "▶" : "RU"); }, 4000);
-        }
     }
     @Override public void onDestroy() {
         stopped = true;
@@ -428,7 +438,7 @@ public class CaptureService extends Service {
         try { if (projection != null) projection.stop(); } catch (Exception ignored) {}
         try { if (recognizer != null) recognizer.close(); } catch (Exception ignored) {}
         try { if (captions != null) wm.removeView(captions); } catch (Exception ignored) {}
-        try { if (bubble != null) wm.removeView(bubble); } catch (Exception ignored) {}
+        try { if (controls != null) wm.removeView(controls); } catch (Exception ignored) {}
         worker.shutdownNow();
         super.onDestroy();
     }

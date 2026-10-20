@@ -39,7 +39,7 @@ public class MainActivity extends Activity {
         title.setTextColor(Color.rgb(25, 25, 35));
         title.setGravity(Gravity.CENTER_VERTICAL);
         root.addView(title, new LinearLayout.LayoutParams(-1, dp(58)));
-        text(root, "Оставайся в обычном Chrome. Переводчик увидит открытые реплики, распознает английский текст локально и покажет перевод Venice поверх рисунков.");
+        text(root, "Работает поверх обычного Chrome. После включения увидишь плавающую панель с кнопкой «▶ Перевести». Нажимай её для ручного перевода или оставь «Авто: ВКЛ» для перевода при чтении.");
         text(root, "Ключ Venice AI (хранится в Android Keystore)");
         keyField = edit(root, "Вставь свой API-ключ", "");
         keyField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
         quotaField.setInputType(InputType.TYPE_CLASS_NUMBER);
         Button save = button(root, "Сохранить настройки");
         save.setOnClickListener(v -> store());
-        Button start = button(root, "▶ Включить перевод поверх Chrome");
+        Button start = button(root, "▶ Запустить панель перевода поверх Chrome");
         start.setOnClickListener(v -> {
             if (!store()) return;
             pendingStart = true;
@@ -74,7 +74,7 @@ public class MainActivity extends Activity {
         status.setTextSize(14);
         status.setPadding(0, dp(16), 0, dp(10));
         root.addView(status);
-        text(root, "После запуска Android спросит разрешение на запись экрана. Выбери «Весь экран» и открой Chrome. Кнопку RU можно перетаскивать; короткое нажатие — пауза, долгое — остановить.");
+        text(root, "Порядок: 1) Вставь ключ Venice, 2) нажми «Запустить панель перевода», 3) разреши показ поверх приложений и захват «Всего экрана», 4) в Chrome нажми «▶ Перевести». Панель можно перетащить за верхнюю строку. «Авто: ВКЛ» включает перевод при прокрутке, «■» останавливает.");
         text(root, "ВАЖНО: пока перевод включён, он может распознавать текст любого видимого приложения. Перед открытием личной переписки, банка и настроек ставь перевод на паузу. Скриншоты никуда не загружаются: Venice получает только фразы OCR.");
         text(root, "Приложение не читает cookies Chrome и не обходит платную подписку Toomics.");
         refresh();
@@ -136,7 +136,8 @@ public class MainActivity extends Activity {
     }
     private void refresh() {
         String err = com.venicetranslate.manga.Settings.prefs(this).getString("last_error", "нет");
-        status.setText("Запросов сегодня: " + com.venicetranslate.manga.Settings.callsToday(this)
+        String lastStatus = com.venicetranslate.manga.Settings.prefs(this).getString("last_status", "Ещё не запускался");
+        status.setText("Состояние: " + lastStatus + "\nЗапросов сегодня: " + com.venicetranslate.manga.Settings.callsToday(this)
                 + "/" + com.venicetranslate.manga.Settings.maxDaily(this)
                 + "\nТокенов вход / выход (всего): "
                 + com.venicetranslate.manga.Settings.prefs(this).getInt("prompt_tokens", 0)
@@ -182,7 +183,9 @@ public class MainActivity extends Activity {
             svc.putExtra(CaptureService.PROJECTION_DATA, data);
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(svc);
             else startService(svc);
-            openChrome();
+            Toast.makeText(this, "Панель «Перевести» появится поверх Chrome", Toast.LENGTH_LONG).show();
+            new android.os.Handler(android.os.Looper.getMainLooper())
+                    .postDelayed(this::openChrome, 650);
         }
     }
     private void openChrome() {
