@@ -30,8 +30,8 @@ final class FloatingControls extends LinearLayout {
     private boolean autoEnabled = true;
 
     FloatingControls(Context context, Callbacks callbacks, int initialFontSp) {
-        fontSp = Math.max(7, Math.min(16, initialFontSp));
         super(context);
+        fontSp = Math.max(7, Math.min(16, initialFontSp));
         setOrientation(VERTICAL);
         setPadding(dp(8), dp(6), dp(8), dp(7));
         GradientDrawable background = new GradientDrawable();
