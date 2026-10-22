@@ -18,15 +18,19 @@ final class FloatingControls extends LinearLayout {
     interface Callbacks {
         void translateNow();
         void setAutomatic(boolean enabled);
+        void fontChanged(int fontSp);
         void stop();
     }
 
     private final TextView dragHandle;
     private final TextView status;
     private final Button automatic;
+    private final TextView fontLabel;
+    private int fontSp;
     private boolean autoEnabled = true;
 
-    FloatingControls(Context context, Callbacks callbacks) {
+    FloatingControls(Context context, Callbacks callbacks, int initialFontSp) {
+        fontSp = Math.max(7, Math.min(16, initialFontSp));
         super(context);
         setOrientation(VERTICAL);
         setPadding(dp(8), dp(6), dp(8), dp(7));
@@ -37,7 +41,7 @@ final class FloatingControls extends LinearLayout {
         setElevation(dp(8));
 
         dragHandle = new TextView(context);
-        dragHandle.setText("⋮⋮  Venice RU   •   перетащить");
+        dragHandle.setText("⋮⋮  Venice RU 0.3   •   перетащить");
         dragHandle.setTextColor(Color.WHITE);
         dragHandle.setTextSize(13);
         dragHandle.setGravity(Gravity.CENTER_VERTICAL);
@@ -68,6 +72,42 @@ final class FloatingControls extends LinearLayout {
         row.addView(stop, stopParams);
         stop.setContentDescription("Остановить переводчик");
         stop.setOnClickListener(v -> callbacks.stop());
+
+        LinearLayout fontRow = new LinearLayout(context);
+        fontRow.setOrientation(HORIZONTAL);
+        fontRow.setGravity(Gravity.CENTER_VERTICAL);
+        LayoutParams fontRowParams = new LayoutParams(LayoutParams.MATCH_PARENT, dp(38));
+        fontRowParams.topMargin = dp(3);
+        addView(fontRow, fontRowParams);
+
+        fontLabel = new TextView(context);
+        fontLabel.setTextColor(Color.WHITE);
+        fontLabel.setTextSize(12);
+        fontLabel.setGravity(Gravity.CENTER_VERTICAL);
+        fontLabel.setText("Размер: " + fontSp + " sp");
+        fontRow.addView(fontLabel, new LayoutParams(0, LayoutParams.MATCH_PARENT, 1f));
+
+        Button minus = makeButton(context, "A−", Color.rgb(84, 98, 129));
+        fontRow.addView(minus, new LayoutParams(0, LayoutParams.MATCH_PARENT, .5f));
+        Button plus = makeButton(context, "A+", Color.rgb(84, 98, 129));
+        LayoutParams plusParams = new LayoutParams(0, LayoutParams.MATCH_PARENT, .5f);
+        plusParams.leftMargin = dp(4);
+        fontRow.addView(plus, plusParams);
+
+        minus.setOnClickListener(v -> {
+            if (fontSp > 7) {
+                fontSp--;
+                fontLabel.setText("Размер: " + fontSp + " sp");
+                callbacks.fontChanged(fontSp);
+            }
+        });
+        plus.setOnClickListener(v -> {
+            if (fontSp < 16) {
+                fontSp++;
+                fontLabel.setText("Размер: " + fontSp + " sp");
+                callbacks.fontChanged(fontSp);
+            }
+        });
 
         status = new TextView(context);
         status.setTextColor(Color.rgb(235, 238, 250));

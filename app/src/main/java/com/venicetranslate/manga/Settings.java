@@ -24,6 +24,12 @@ final class Settings {
     static String model(Context c) {
         return prefs(c).getString("model", DEFAULT_MODEL);
     }
+    static int fontSp(Context c) {
+        return Math.max(7, Math.min(16, prefs(c).getInt("font_sp", 10)));
+    }
+    static void saveFontSp(Context c, int fontSp) {
+        prefs(c).edit().putInt("font_sp", Math.max(7, Math.min(16, fontSp))).apply();
+    }
     static int interval(Context c) {
         return Math.min(8000, Math.max(1400, prefs(c).getInt("interval", 2400)));
     }

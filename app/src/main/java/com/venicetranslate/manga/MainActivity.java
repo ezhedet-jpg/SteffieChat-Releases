@@ -21,7 +21,7 @@ public class MainActivity extends Activity {
     private static final int REQ_OVERLAY = 100;
     private static final int REQ_CAPTURE = 101;
     private static final int REQ_NOTIFY = 102;
-    private EditText keyField, modelField, delayField, quotaField;
+    private EditText keyField, modelField, delayField, quotaField, fontField;
     private TextView status;
     private boolean pendingStart;
     @Override public void onCreate(Bundle b) {
@@ -34,7 +34,7 @@ public class MainActivity extends Activity {
         scroll.addView(root);
         setContentView(scroll);
         TextView title = new TextView(this);
-        title.setText("Манга → русский · Venice AI");
+        title.setText("Манга → русский · Venice AI v0.3");
         title.setTextSize(24);
         title.setTextColor(Color.rgb(25, 25, 35));
         title.setGravity(Gravity.CENTER_VERTICAL);
@@ -50,6 +50,10 @@ public class MainActivity extends Activity {
         text(root, "Пауза между проверками экрана, мс (1400–8000)");
         delayField = edit(root, "2400", Integer.toString(com.venicetranslate.manga.Settings.interval(this)));
         delayField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        text(root, "Размер русского текста (7–16 sp, рекомендуется 10)");
+        fontField = edit(root, "10", Integer.toString(com.venicetranslate.manga.Settings.fontSp(this)));
+        fontField.setInputType(InputType.TYPE_CLASS_NUMBER);
+        text(root, "Шрифт можно уменьшать или увеличивать прямо поверх Chrome кнопками A− и A+, не тратя токены Venice.");
         text(root, "Максимум запросов Venice в день (1–500)");
         quotaField = edit(root, "75", Integer.toString(com.venicetranslate.manga.Settings.maxDaily(this)));
         quotaField.setInputType(InputType.TYPE_CLASS_NUMBER);
@@ -74,7 +78,7 @@ public class MainActivity extends Activity {
         status.setTextSize(14);
         status.setPadding(0, dp(16), 0, dp(10));
         root.addView(status);
-        text(root, "Порядок: 1) Вставь ключ Venice, 2) нажми «Запустить панель перевода», 3) разреши показ поверх приложений и захват «Всего экрана», 4) в Chrome нажми «▶ Перевести». Панель можно перетащить за верхнюю строку. «Авто: ВКЛ» включает перевод при прокрутке, «■» останавливает.");
+        text(root, "Версия 0.3: шрифт уменьшен; кнопки A− / A+ меняют его без дополнительного запроса Venice. Порядок: 1) вставь ключ, 2) запусти перевод, 3) разреши показ поверх приложений и захват всего экрана, 4) в Chrome нажми «▶ Перевести». Панель перетаскивается за верхнюю строку, «■» останавливает.");
         text(root, "ВАЖНО: пока перевод включён, он может распознавать текст любого видимого приложения. Перед открытием личной переписки, банка и настроек ставь перевод на паузу. Скриншоты никуда не загружаются: Venice получает только фразы OCR.");
         text(root, "Приложение не читает cookies Chrome и не обходит платную подписку Toomics.");
         refresh();
@@ -129,6 +133,7 @@ public class MainActivity extends Activity {
         com.venicetranslate.manga.Settings.prefs(this).edit()
                 .putString("model", model)
                 .putInt("interval", num(delayField, 2400, 1400, 8000))
+                .putInt("font_sp", num(fontField, 10, 7, 16))
                 .putInt("max_daily", num(quotaField, 75, 1, 500))
                 .apply();
         refresh();

@@ -70,6 +70,8 @@ public class CaptureService extends Service {
     private TextRecognizer recognizer;
     private int screenWidth, screenHeight;
     private boolean stopped, autoEnabled = true, scanning, pending, manualQueued;
+    private boolean checkingFrame, resetFrameBaseline;
+    private int[] lastFrameSignature;
     private String shownContent = "", lastContent = "", previousContext = "";
     private int repeated;
     private long retryAfter;
@@ -77,7 +79,9 @@ public class CaptureService extends Service {
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (stopped) return;
-            if (autoEnabled && !scanning && reader != null) scan(false);
+            if (autoEnabled && !scanning && !pending && !checkingFrame && reader != null) {
+                checkForScreenChange();
+            }
             ui.postDelayed(this, Settings.interval(CaptureService.this));
         }
     };
@@ -142,7 +146,7 @@ public class CaptureService extends Service {
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader.getSurface(), null, ui);
         createOverlays();
-        ui.postDelayed(tick, 600);
+        ui.postDelayed(tick, 1800);
     }
     private void createOverlays() {
         captions = new CaptionOverlay(this);
@@ -178,15 +182,23 @@ public class CaptureService extends Service {
             }
             @Override public void setAutomatic(boolean enabled) {
                 autoEnabled = enabled;
+                lastFrameSignature = null;
+                resetFrameBaseline = false;
                 lastContent = "";
                 repeated = 0;
-                if (!enabled && captions != null) captions.clear();
+                // Leaving auto mode should not erase already translated subtitles.
                 showStatus(enabled
-                        ? "Автоперевод включён. Останови прокрутку для перевода."
+                        ? "Автоперевод включён. Новая страница будет распознана."
                         : "Автоперевод выключен. Нажимай «Перевести» вручную.");
             }
+            @Override public void fontChanged(int fontSp) {
+                Settings.saveFontSp(CaptureService.this, fontSp);
+                if (captions != null) captions.setFontSp(fontSp);
+                resetFrameBaseline = true;
+                showStatus("Размер перевода: " + fontSp + " sp. Перевод обновлён без запроса Venice.");
+            }
             @Override public void stop() { stopSelf(); }
-        });
+        }, Settings.fontSp(this));
 
         controlsParams = new WindowManager.LayoutParams(
                 Math.min(dp(330), screenWidth - dp(12)),
@@ -210,6 +222,82 @@ public class CaptureService extends Service {
     private int dp(float px) {
         return (int)(px * getResources().getDisplayMetrics().density + .5f);
     }
+
+    /**
+     * Sample the visible frame WITHOUT hiding our overlays. When the user isn't
+     * scrolling, the samples remain identical and the subtitles never blink.
+     * Only when the screen changes do we briefly hide overlays to capture clean
+     * English for ML Kit. This does not require extra Venice requests.
+     */
+    private void checkForScreenChange() {
+        checkingFrame = true;
+        worker.execute(() -> {
+            Image frame = null;
+            int[] signature = null;
+            try {
+                if (reader != null) {
+                    frame = reader.acquireLatestImage();
+                    if (frame != null) signature = getFrameSignature(frame);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Frame fingerprint failed", e);
+            } finally {
+                if (frame != null) frame.close();
+            }
+            final int[] current = signature;
+            ui.post(() -> {
+                checkingFrame = false;
+                if (stopped || !autoEnabled || scanning || pending || current == null) return;
+                if (resetFrameBaseline) {
+                    lastFrameSignature = current;
+                    resetFrameBaseline = false;
+                    return;
+                }
+                if (lastFrameSignature == null || isFrameChanged(lastFrameSignature, current)) {
+                    lastFrameSignature = current;
+                    scan(false);
+                }
+            });
+        });
+    }
+
+    private int[] getFrameSignature(Image frame) {
+        Image.Plane plane = frame.getPlanes()[0];
+        ByteBuffer pixels = plane.getBuffer();
+        int stride = plane.getRowStride();
+        int pixelStride = plane.getPixelStride();
+        final int cols = 12, rows = 10;
+        int[] values = new int[cols * rows];
+        for (int yIndex = 0; yIndex < rows; yIndex++) {
+            int y = Math.min(screenHeight - 1,
+                    (int)(screenHeight * (.16f + .75f * (yIndex + .5f) / rows)));
+            for (int xIndex = 0; xIndex < cols; xIndex++) {
+                int x = Math.min(screenWidth - 1,
+                        (int)(screenWidth * (.055f + .89f * (xIndex + .5f) / cols)));
+                int offset = y * stride + x * pixelStride;
+                if (offset + 2 >= pixels.limit()) continue;
+                int r = pixels.get(offset) & 255;
+                int g = pixels.get(offset + 1) & 255;
+                int b = pixels.get(offset + 2) & 255;
+                values[yIndex * cols + xIndex] = (r << 16) | (g << 8) | b;
+            }
+        }
+        return values;
+    }
+
+    private boolean isFrameChanged(int[] before, int[] after) {
+        if (before.length != after.length) return true;
+        int different = 0;
+        for (int i = 0; i < before.length; i++) {
+            int a = before[i], b = after[i];
+            int delta = Math.abs((a >> 16 & 255) - (b >> 16 & 255))
+                    + Math.abs((a >> 8 & 255) - (b >> 8 & 255))
+                    + Math.abs((a & 255) - (b & 255));
+            if (delta > 65) different++;
+        }
+        return different >= Math.max(9, before.length / 12);
+    }
+
     private void scan(boolean manual) {
         if (stopped || reader == null) return;
         if (scanning) {
@@ -236,6 +324,7 @@ public class CaptureService extends Service {
                 ui.post(() -> {
                     if (captions != null) captions.setVisibility(View.VISIBLE);
                     if (controls != null) controls.setVisibility(View.VISIBLE);
+                    resetFrameBaseline = true;
                     if (stopped || finalBitmap == null) {
                         scanning = false;
                         return;
@@ -296,7 +385,7 @@ public class CaptureService extends Service {
             if (box == null) continue;
             String english = block.getText().replace('\n', ' ').replaceAll("\\s+", " ").trim();
             if (english.length() < 2 || !english.matches("(?s).*[A-Za-z].*")) continue;
-            if (box.top < (int)(h * .10f) || box.bottom > (int)(h * .97f)) continue;
+            if (box.top < (int)(h * .035f) || box.bottom > (int)(h * .985f)) continue;
             if (box.width() < 15 || box.height() < 10 || english.length() > 380) continue;
             dialogs.add(new Dialogue(0, box, english));
         }
@@ -331,6 +420,7 @@ public class CaptureService extends Service {
         Map<Integer, String> stored = cache.get(content);
         if (stored != null) {
             captions.show(capped, stored, w, h);
+            resetFrameBaseline = true;
             shownContent = content;
             if (forced) showStatus("Готово: перевод из кэша (" + capped.size() + " реплик).");
             return;
@@ -372,6 +462,7 @@ public class CaptureService extends Service {
                     previousContext = ctx.length() > 850 ? ctx.substring(ctx.length() - 850) : ctx.toString();
                     if (requested.equals(lastContent)) {
                         captions.show(capped, result.translations, w, h);
+                        resetFrameBaseline = true;
                         shownContent = requested;
                         showStatus("Переведено " + result.translations.size()
                                 + " из " + capped.size() + " реплик · Venice AI");
